@@ -43,7 +43,7 @@ impl TryFrom<&str> for Irq {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Response {
     Ok,
-    OkWithVal(String),
+    OkVal(String),
     Err(String),
 }
 
@@ -54,7 +54,7 @@ impl From<&str> for Response {
             return Self::Err(s.to_string());
         }
         match parts.next() {
-            Some(val) => Self::OkWithVal(val.to_string()),
+            Some(val) => Self::OkVal(val.to_string()),
             None => Self::Ok,
         }
     }
@@ -80,16 +80,39 @@ impl QTestWriter {
             )
         })
     }
-
-    pub async fn readl(&mut self, addr: usize) -> io::Result<u32> {
-        let resp = self.write(format!("readl {addr}\n").as_bytes()).await?;
-        match resp {
-            Response::OkWithVal(resp) => u32::from_str_radix(resp.trim_start_matches("0x"), 16)
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "unable to parse response")),
-            _ => Err(io::Error::new(io::ErrorKind::Other, "unable to readl")),
-        }
-    }
 }
+
+macro_rules! impl_write_read {
+    ($write:ident, $read:ident, $ty:ty) => {
+        impl QTestWriter {
+            pub async fn $write(&mut self, addr: usize, val: $ty) -> io::Result<Response> {
+                self.write(format!("{} {:#x} {:#x}\n", stringify!($write), addr, val).as_bytes())
+                    .await
+            }
+            pub async fn $read(&mut self, addr: usize) -> io::Result<$ty> {
+                let resp = self
+                    .write(format!("{} {:#x}\n", stringify!($read), addr).as_bytes())
+                    .await?;
+                match resp {
+                    Response::OkVal(resp) => {
+                        <$ty>::from_str_radix(resp.trim_start_matches("0x"), 16).map_err(|_| {
+                            io::Error::new(io::ErrorKind::Other, "unable to parse response")
+                        })
+                    }
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unable to $name"),
+                    )),
+                }
+            }
+        }
+    };
+}
+
+impl_write_read!(writeb, readb, u8);
+impl_write_read!(writew, readw, u16);
+impl_write_read!(writel, readl, u32);
+impl_write_read!(writeq, readq, u64);
 
 pub struct QTestReader {
     reader: OwnedReadHalf,
